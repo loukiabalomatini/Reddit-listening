@@ -39,14 +39,14 @@ function userAgent() {
 }
 
 async function getOAuthToken() {
+  const directToken = process.env.REDDIT_ACCESS_TOKEN?.trim();
+  if (directToken) return directToken;
+
   const clientId = process.env.REDDIT_CLIENT_ID?.trim();
   const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
-
   if (!clientId || !clientSecret) return null;
 
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken.value;
-  }
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
 
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
   const response = await fetch('https://www.reddit.com/api/v1/access_token', {
@@ -69,7 +69,6 @@ async function getOAuthToken() {
     value: token.access_token,
     expiresAt: Date.now() + Math.max(60, token.expires_in || 3600) * 1000
   };
-
   return cachedToken.value;
 }
 
@@ -94,10 +93,7 @@ async function fetchViaApi(limit: number): Promise<RedditItem[]> {
     throw new Error(`Reddit API returned ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
   }
 
-  const json = await response.json() as {
-    data?: { children?: Array<{ data?: Record<string, any> }> };
-  };
-
+  const json = await response.json() as { data?: { children?: Array<{ data?: Record<string, any> }> } };
   return (json.data?.children || []).map(({ data = {} }) => ({
     id: String(data.id || ''),
     title: String(data.title || ''),
@@ -107,7 +103,7 @@ async function fetchViaApi(limit: number): Promise<RedditItem[]> {
     createdAt: data.created_utc ? new Date(Number(data.created_utc) * 1000).toISOString() : new Date().toISOString(),
     url: data.permalink ? `https://www.reddit.com${data.permalink}` : String(data.url || ''),
     score: Number(data.score || 0)
-  })).filter((item) => item.id && item.url);
+  })).filter(item => item.id && item.url);
 }
 
 async function fetchViaRss(limit: number): Promise<RedditItem[]> {
@@ -125,13 +121,11 @@ async function fetchViaRss(limit: number): Promise<RedditItem[]> {
 
   const xml = await response.text();
   const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)];
-
-  return entries.map((match) => {
+  return entries.map(match => {
     const entry = match[1];
     const url = entry.match(/<link[^>]+href="([^"]+)"/i)?.[1] || '';
     const id = field(entry, 'id') || url;
     const category = entry.match(/<category[^>]+term="([^"]+)"/i)?.[1] || '';
-
     return {
       id,
       title: field(entry, 'title'),
@@ -142,16 +136,10 @@ async function fetchViaRss(limit: number): Promise<RedditItem[]> {
       url,
       score: 0
     };
-  }).filter((item) => item.id && item.url);
+  }).filter(item => item.id && item.url);
 }
 
-/**
- * Global Reddit ingestion stream.
- *
- * Primary source: Reddit Data API via OAuth.
- * Fallback: Reddit RSS, kept only as a compatibility fallback while API
- * credentials are being configured. We do not use Reddit search per keyword.
- */
+/** Global Reddit ingestion stream: OAuth Data API first, RSS only as temporary fallback. */
 export async function fetchNewReddit(limit = 100): Promise<RedditItem[]> {
   try {
     const items = await fetchViaApi(limit);
@@ -159,7 +147,6 @@ export async function fetchNewReddit(limit = 100): Promise<RedditItem[]> {
     return items;
   } catch (apiError) {
     if (process.env.REDDIT_ALLOW_RSS_FALLBACK === 'false') throw apiError;
-
     console.warn(`Reddit API ingestion unavailable: ${apiError instanceof Error ? apiError.message : String(apiError)}`);
     const items = await fetchViaRss(limit);
     console.log(`Reddit RSS fallback: ${items.length} items fetched from r/all/new`);
