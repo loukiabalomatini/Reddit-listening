@@ -27,31 +27,56 @@ function field(entry: string, tag: string) {
   return decode(entry.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] || '');
 }
 
-/** Global Reddit search feed, newest first. No Reddit API app is required. */
-export async function searchReddit(query: string, limit = 25): Promise<RedditItem[]> {
-  const url = new URL('https://www.reddit.com/search.rss');
-  url.searchParams.set('q', query);
-  url.searchParams.set('sort', 'new');
-  url.searchParams.set('limit', String(Math.min(limit, 25)));
+/**
+ * Read Reddit's global newest-post RSS feed.
+ *
+ * This intentionally avoids Reddit's search endpoint. The worker downloads
+ * the newest global posts once per polling cycle and applies monitor rules
+ * locally, which gives us one ingestion stream instead of one Reddit request
+ * per keyword.
+ */
+export async function fetchNewReddit(limit = 100): Promise<RedditItem[]> {
+  const url = new URL('https://www.reddit.com/r/all/new/.rss');
+  url.searchParams.set('limit', String(Math.min(Math.max(limit, 25), 100)));
 
   const response = await fetch(url, {
-    headers: { 'User-Agent': process.env.REDDIT_USER_AGENT || 'RedditListening/1.0' }
+    headers: {
+      Accept: 'application/atom+xml, application/rss+xml;q=0.9, text/xml;q=0.8',
+      'User-Agent': process.env.REDDIT_USER_AGENT || 'RedditListening/1.0'
+    }
   });
-  if (!response.ok) throw new Error(`Reddit RSS returned ${response.status}`);
+
+  if (!response.ok) {
+    throw new Error(`Reddit global RSS returned ${response.status}`);
+  }
 
   const xml = await response.text();
-  return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)].map((match) => {
+  const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)];
+
+  return entries.map((match) => {
     const entry = match[1];
     const url = entry.match(/<link[^>]+href="([^"]+)"/i)?.[1] || '';
+    const id = field(entry, 'id') || url;
+    const category = entry.match(/<category[^>]+term="([^"]+)"/i)?.[1] || '';
+
     return {
-      id: field(entry, 'id') || url,
+      id,
       title: field(entry, 'title'),
-      text: field(entry, 'content'),
+      text: field(entry, 'content') || field(entry, 'summary'),
       author: field(entry, 'name') || 'unknown',
-      subreddit: entry.match(/<category[^>]+term="([^"]+)"/i)?.[1] || 'unknown',
-      createdAt: field(entry, 'updated') || new Date().toISOString(),
+      subreddit: category.replace(/^r\//i, '') || 'unknown',
+      createdAt: field(entry, 'updated') || field(entry, 'published') || new Date().toISOString(),
       url,
       score: 0
     };
-  });
+  }).filter((item) => item.id && item.url);
+}
+
+/**
+ * Backwards-compatible name for callers that still import searchReddit.
+ * The query is no longer sent to Reddit; filtering happens in the monitor
+ * layer so every active monitor sees the same global ingestion stream.
+ */
+export async function searchReddit(_query: string, limit = 25): Promise<RedditItem[]> {
+  return fetchNewReddit(limit);
 }
