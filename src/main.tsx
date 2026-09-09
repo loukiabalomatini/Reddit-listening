@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState}from'react';
+import{createRoot}from'react-dom/client';
 import{Activity,Bell,CheckCircle2,ChevronDown,ChevronRight,Clock3,ExternalLink,Filter,Hash,MessageSquare,Pause,Play,Plus,Radio,Search,Settings,ShieldCheck,Sparkles,X,Trash2}from'lucide-react';
 import'./styles.css';
 
